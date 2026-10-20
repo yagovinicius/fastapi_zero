@@ -1,0 +1,1 @@
+# FastAPI até o deploy - Base (2026)

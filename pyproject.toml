@@ -1,0 +1,64 @@
+[project]
+name = "fastapi-zero"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Yago Vinicius",email = "yagoviniciusribeiro05@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.13,<4.0"
+dependencies = [
+    "fastapi[standard] (>=0.153.0,<0.154.0)"
+]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[dependency-groups]
+dev = [
+    "ruff (>=0.17.1,<0.18.0)",
+    "mypy (>=2.4.0,<3.0.0)",
+    "pytest (>=9.1.1,<10.0.0)",
+    "pytest-cov (>=7.1.0,<8.0.0)",
+    "typos (>=1.51.1,<2.0.0)",
+    "poethepoet (>=0.49.0,<0.50.0)"
+]
+
+[tool.ruff]
+line-length = 79
+extend-exclude = ['migrations']
+
+[tool.ruff.lint]
+preview = true
+select = ['I', 'F', 'E', 'W', 'PL', 'PT']
+
+[tool.ruff.format]
+preview = true
+quote-style = 'single'
+
+[tool.mypy]
+strict = true
+
+[tool.pytest]
+pythonpath = ['.']
+addopts = ['-p', 'no:warnings', '--cov=fastapi_zero', '--cov-context=test']
+
+[tool.typos.files]
+extend-exclude = ["*.md", "migrations"]
+
+[tool.poe] 
+poetry_command = ""
+
+[tool.poe.tasks]
+lint = { cmd = "ruff check" }
+format.sequence = [
+  { cmd = "ruff check --fix" },
+  { cmd = "ruff format" },
+]
+serve = "fastapi dev fastapi_zero/app.py"
+test.sequence = [
+  "lint",
+  { cmd = "pytest -s -x -vv $POE_EXTRA_ARGS" },
+  { cmd = "coverage html --show-contexts" },
+]
