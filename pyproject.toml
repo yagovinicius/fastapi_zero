@@ -31,7 +31,7 @@ extend-exclude = ['migrations']
 
 [tool.ruff.lint]
 preview = true
-select = ['I', 'F', 'E', 'W', 'PL', 'PT']
+select = ['I', 'F', 'E', 'W', 'PL', 'PT', 'UP', 'B', 'SIM']
 
 [tool.ruff.format]
 preview = true
@@ -39,6 +39,9 @@ quote-style = 'single'
 
 [tool.mypy]
 strict = true
+plugins = [
+  "pydantic.mypy"
+]
 
 [tool.pytest]
 pythonpath = ['.']
@@ -49,12 +52,17 @@ extend-exclude = ["*.md", "migrations"]
 
 [tool.poe] 
 poetry_command = ""
-
+executor.type = "virtualenv"
+  
 [tool.poe.tasks]
-lint = { cmd = "ruff check" }
+lint.sequence = [
+  { cmd = "typos" },
+  { cmd = "ruff check" },
+  { cmd = "mypy ." },
+]
 format.sequence = [
-  { cmd = "ruff check --fix" },
   { cmd = "ruff format" },
+  { cmd = "ruff check --fix" },
 ]
 serve = "fastapi dev fastapi_zero/app.py"
 test.sequence = [
