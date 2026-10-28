@@ -18,36 +18,39 @@ def test_create_user(client: TestClient) -> None:
             'password': 'secret',
         },
     )
+
     assert response.status_code == HTTPStatus.CREATED
-    assert response.json() == {
-        'id': 1,
-        'email': 'alice@example.com',
-        'username': 'alice',
-    }
+    assert response.json()['username'] == 'alice'
+    assert response.json()['email'] == 'alice@example.com'
+    assert response.json()['id'] == 1
+
+    assert 'created_at' in response.json()
+    assert 'updated_at' in response.json()
 
 
 def test_read_users(client: TestClient) -> None:
     response = client.get('/users')
     assert response.status_code == HTTPStatus.OK
-    assert response.json() == {
-        'users': [
-            {
-                'id': 1,
-                'email': 'alice@example.com',
-                'username': 'alice',
-            }
-        ]
-    }
+
+    assert response.json()['users'][0]['username'] == 'alice'
+    assert response.json()['users'][0]['email'] == 'alice@example.com'
+    assert response.json()['users'][0]['id'] == 1
+
+    assert 'created_at' in response.json()['users'][0]
+    assert 'updated_at' in response.json()['users'][0]
 
 
 def test_get_user_by_id(client: TestClient) -> None:
     response = client.get('/users/1')
+
     assert response.status_code == HTTPStatus.OK
-    assert response.json() == {
-        'username': 'alice',
-        'email': 'alice@example.com',
-        'id': 1,
-    }
+
+    assert response.json()['username'] == 'alice'
+    assert response.json()['email'] == 'alice@example.com'
+    assert response.json()['id'] == 1
+
+    assert 'created_at' in response.json()
+    assert 'updated_at' in response.json()
 
 
 def test_update_user(client: TestClient) -> None:
@@ -61,11 +64,12 @@ def test_update_user(client: TestClient) -> None:
     )
 
     assert response.status_code == HTTPStatus.OK
-    assert response.json() == {
-        'username': 'bob',
-        'email': 'bob@example.com',
-        'id': 1,
-    }
+    assert response.json()['username'] == 'bob'
+    assert response.json()['email'] == 'bob@example.com'
+    assert response.json()['id'] == 1
+
+    assert 'created_at' in response.json()
+    assert 'updated_at' in response.json()
 
 
 def test_delete_user(client: TestClient) -> None:

@@ -30,7 +30,10 @@ def create_user(user: UserSchema) -> UserPublic:
 
 @app.get('/users', status_code=HTTPStatus.OK)
 def get_user() -> UserList:
-    return UserList(users=database)
+
+    public_users = [UserPublic.model_validate(user) for user in database]
+
+    return UserList(users=public_users)
 
 
 @app.get('/users/{id}', status_code=HTTPStatus.OK)
