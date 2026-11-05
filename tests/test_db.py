@@ -1,13 +1,14 @@
 from dataclasses import asdict
-from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from fastapi_zero.database import get_session
 from fastapi_zero.models import User
+from tests.conftest import MockDbTime
 
 
-def test_create_user(session: Session, mock_db_time: Any) -> None:
+def test_create_user(session: Session, mock_db_time: MockDbTime) -> None:
     with mock_db_time(model=User) as (time_post, _time_put):
         new_user = User(
             username='test',
@@ -31,7 +32,7 @@ def test_create_user(session: Session, mock_db_time: Any) -> None:
     }
 
 
-def test_update_user(session: Session, mock_db_time: Any) -> None:
+def test_update_user(session: Session, mock_db_time: MockDbTime) -> None:
     with mock_db_time(model=User) as (time_post, time_put):
         new_user = User(
             username='test',
@@ -61,3 +62,10 @@ def test_update_user(session: Session, mock_db_time: Any) -> None:
             'created_at': time_post,
             'updated_at': time_put,
         }
+
+
+def test_get_session() -> None:
+    session = next(get_session())
+
+    response = session.execute(text('SELECT 1')).scalar()
+    assert response == 1

@@ -12,7 +12,7 @@ from fastapi_zero.models import table_registry
 config = context.config
 config.set_main_option(
     'sqlalchemy.url',
-    Settings().DATABASE_URL, # type: ignore
+    Settings().DATABASE_URL,
 )
 
 # Interpret the config file for Python logging.
