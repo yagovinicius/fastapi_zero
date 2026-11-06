@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from http import HTTPStatus
-from typing import Any
+from typing import Annotated, Any
 from zoneinfo import ZoneInfo
 
 from fastapi import Depends, HTTPException
@@ -12,10 +12,9 @@ from sqlalchemy.orm import Session
 
 from fastapi_zero.database import get_session
 from fastapi_zero.models import User
+from fastapi_zero.settings import Settings
 
-SECRET_KEY = 'your-secret-key-must-be-at-least-32-chacarter-long'
-ALGORITHM = 'HS256'
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+settings = Settings()
 
 
 pwd_context = PasswordHash.recommended()
@@ -33,21 +32,24 @@ def create_access_token(data: dict[str, Any]) -> str:
     to_encode = data.copy()
 
     expire = datetime.now(tz=ZoneInfo('UTC')) + timedelta(
-        minutes=ACCESS_TOKEN_EXPIRE_MINUTES
+        minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
     )
 
     to_encode.update({'exp': expire})
 
-    encoded_jwt = encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    encoded_jwt = encode(
+        to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM
+    )
 
     return encoded_jwt
 
 
-oauth_scheme = OAuth2PasswordBearer(tokenUrl='token')
+oauth_scheme = OAuth2PasswordBearer(tokenUrl='api/v1/auth/token')
 
 
 def get_current_user(
-    session: Session = Depends(get_session), token: str = Depends(oauth_scheme)
+    session: Annotated[Session, Depends(get_session)],
+    token: Annotated[str, Depends(oauth_scheme)],
 ) -> User:
     credentials_exception = HTTPException(
         status_code=HTTPStatus.UNAUTHORIZED,
@@ -56,7 +58,9 @@ def get_current_user(
     )
 
     try:
-        payload = decode(token, SECRET_KEY, algorithms=ALGORITHM)
+        payload = decode(
+            token, settings.SECRET_KEY, algorithms=settings.ALGORITHM
+        )
         subject_email = payload.get('sub')
         if not subject_email:
             raise credentials_exception

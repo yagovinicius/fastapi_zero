@@ -112,7 +112,8 @@ def user(session: Session, clean_password: str) -> User:
 @pytest.fixture
 def token(client: TestClient, user: User, clean_password: str) -> str:
     response = client.post(
-        '/token', data={'username': user.email, 'password': clean_password}
+        '/api/v1/auth/token',
+        data={'username': user.email, 'password': clean_password},
     )
 
     return response.json()['access_token']
