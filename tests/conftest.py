@@ -1,3 +1,4 @@
+import secrets
 from collections.abc import Callable, Generator
 from contextlib import AbstractContextManager, contextmanager
 from datetime import datetime
@@ -12,6 +13,7 @@ from sqlalchemy.pool import StaticPool
 from fastapi_zero.app import app
 from fastapi_zero.database import get_session
 from fastapi_zero.models import User, table_registry
+from fastapi_zero.security import get_password_hash
 
 type MockDbTime = Callable[
     ..., AbstractContextManager[tuple[datetime, datetime]]
@@ -88,11 +90,16 @@ def mock_db_time() -> MockDbTime:
 
 
 @pytest.fixture
-def user(session: Session) -> User:
+def clean_password() -> str:
+    return secrets.token_hex()
+
+
+@pytest.fixture
+def user(session: Session, clean_password: str) -> User:
     user = User(
         username='test',
         email='test@example.com',
-        password='testTest',
+        password=get_password_hash(clean_password),
     )
 
     session.add(user)
@@ -100,3 +107,12 @@ def user(session: Session) -> User:
     session.refresh(user)
 
     return user
+
+
+@pytest.fixture
+def token(client: TestClient, user: User, clean_password: str) -> str:
+    response = client.post(
+        '/token', data={'username': user.email, 'password': clean_password}
+    )
+
+    return response.json()['access_token']

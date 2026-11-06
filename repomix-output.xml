@@ -46,6 +46,7 @@ fastapi_zero/
   database.py
   models.py
   schemas.py
+  security.py
   settings.py
 migrations/
   versions/
@@ -59,6 +60,7 @@ tests/
   conftest.py
   test_app.py
   test_db.py
+  test_security.py
 .gitignore
 alembic.ini
 pyproject.toml
@@ -68,9 +70,193 @@ README.md
 <files>
 This section contains the contents of the repository's files.
 
+<file path="fastapi_zero/security.py">
+from datetime import datetime, timedelta
+from http import HTTPStatus
+from typing import Any
+from zoneinfo import ZoneInfo
+
+from fastapi import Depends, HTTPException
+from fastapi.security import OAuth2PasswordBearer
+from jwt import DecodeError, decode, encode
+from pwdlib import PasswordHash
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from fastapi_zero.database import get_session
+from fastapi_zero.models import User
+
+SECRET_KEY = 'your-secret-key-must-be-at-least-32-chacarter-long'
+ALGORITHM = 'HS256'
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+
+pwd_context = PasswordHash.recommended()
+
+
+def get_password_hash(password: str) -> str:
+    return pwd_context.hash(password)
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
+
+
+def create_access_token(data: dict[str, Any]) -> str:
+    to_encode = data.copy()
+
+    expire = datetime.now(tz=ZoneInfo('UTC')) + timedelta(
+        minutes=ACCESS_TOKEN_EXPIRE_MINUTES
+    )
+
+    to_encode.update({'exp': expire})
+
+    encoded_jwt = encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+    return encoded_jwt
+
+
+oauth_scheme = OAuth2PasswordBearer(tokenUrl='token')
+
+
+def get_current_user(
+    session: Session = Depends(get_session), token: str = Depends(oauth_scheme)
+) -> User:
+    credentials_exception = HTTPException(
+        status_code=HTTPStatus.UNAUTHORIZED,
+        detail='Could not validate credentials',
+        headers={'WWW-Authenticate': 'Bearer'},
+    )
+
+    try:
+        payload = decode(token, SECRET_KEY, algorithms=ALGORITHM)
+        subject_email = payload.get('sub')
+        if not subject_email:
+            raise credentials_exception
+    except DecodeError as e:
+        raise credentials_exception from e
+
+    user = session.scalar(select(User).where(User.email == subject_email))
+
+    if not user:
+        raise credentials_exception
+
+    return user
+</file>
+
+<file path="tests/test_security.py">
+from http import HTTPStatus
+
+from fastapi.testclient import TestClient
+from jwt import decode
+
+from fastapi_zero.models import User
+from fastapi_zero.security import (
+    ALGORITHM,
+    SECRET_KEY,
+    create_access_token,
+)
+
+
+def test_jwt() -> None:
+    data = {'test': 'test'}
+
+    token = create_access_token(data)
+
+    decoded = decode(token, SECRET_KEY, algorithms=ALGORITHM)
+
+    assert decoded['test'] == data['test']
+    assert 'exp' in decoded
+
+
+def test_get_token(
+    client: TestClient, user: User, clean_password: str
+) -> None:
+    response = client.post(
+        '/token',
+        data={
+            'username': user.email,
+            'password': clean_password,
+        },
+    )
+
+    token = response.json()
+
+    assert response.status_code == HTTPStatus.OK
+    assert token['token_type'] == 'Bearer'
+    assert 'access_token' in token
+
+
+def test_get_token_unauthorized_email(
+    client: TestClient, clean_password: str
+) -> None:
+    response = client.post(
+        '/token',
+        data={'username': 'error@example.com', 'password': clean_password},
+    )
+
+    error = response.json()
+
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert error['detail'] == 'Incorrect email or password'
+
+
+def test_get_token_unauthorized_password(
+    client: TestClient, user: User
+) -> None:
+    response = client.post(
+        '/token',
+        data={'username': user.email, 'password': 'errorPassword'},
+    )
+
+    error = response.json()
+
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert error['detail'] == 'Incorrect email or password'
+
+
+# Decode exception
+def test_jwt_invalid_token(client: TestClient) -> None:
+    response = client.delete(
+        '/users/1', headers={'Authorization': 'Bearer invalid-token'}
+    )
+
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert response.json() == {'detail': 'Could not validate credentials'}
+
+
+# Subject email exception
+def test_get_current_not_found(client: TestClient) -> None:
+    data = {'no-email': 'test'}
+    token = create_access_token(data)
+
+    response = client.delete(
+        '/users/1', headers={'Authorization': f'Bearer {token}'}
+    )
+
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert response.json() == {'detail': 'Could not validate credentials'}
+
+
+# Subject email exception 2
+def test_get_current_user_does_not_exists(client: TestClient) -> None:
+    data = {'sub': 'test@test'}
+    token = create_access_token(data)
+
+    response = client.delete(
+        '/users/1', headers={'Authorization': f'Bearer {token}'}
+    )
+
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert response.json() == {'detail': 'Could not validate credentials'}
+</file>
+
+<file path="fastapi_zero/__init__.py">
+
+</file>
+
 <file path="fastapi_zero/database.py">
 from collections.abc import Generator
-from contextlib import contextmanager
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -80,49 +266,9 @@ from fastapi_zero.settings import Settings
 engine = create_engine(Settings().DATABASE_URL)
 
 
-@contextmanager
 def get_session() -> Generator[Session]:
     with Session(engine) as session:
         yield session
-</file>
-
-<file path="migrations/versions/b5fc6ac7f1ac_add_updated_at.py">
-"""add updated_at
-
-Revision ID: b5fc6ac7f1ac
-Revises: ebadc47a87db
-Create Date: 2026-11-03 10:04:40.643819
-
-"""
-from typing import Sequence, Union
-
-from alembic import op
-import sqlalchemy as sa
-
-
-# revision identifiers, used by Alembic.
-revision: str = 'b5fc6ac7f1ac'
-down_revision: Union[str, Sequence[str], None] = 'ebadc47a87db'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
-
-
-def upgrade() -> None:
-    """Upgrade schema."""
-    # ### commands auto generated by Alembic - please adjust! ###
-    op.add_column('users', sa.Column('updated_at', sa.DateTime(), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False))
-    # ### end Alembic commands ###
-
-
-def downgrade() -> None:
-    """Downgrade schema."""
-    # ### commands auto generated by Alembic - please adjust! ###
-    op.drop_column('users', 'updated_at')
-    # ### end Alembic commands ###
-</file>
-
-<file path="fastapi_zero/__init__.py">
-
 </file>
 
 <file path="fastapi_zero/models.py">
@@ -158,19 +304,43 @@ class User:
         server_default=func.now(),
         onupdate=func.now(),
     )
+    clean_password = None
+    clean_password = None
 </file>
 
-<file path="fastapi_zero/settings.py">
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+<file path="migrations/versions/b5fc6ac7f1ac_add_updated_at.py">
+"""add updated_at
+
+Revision ID: b5fc6ac7f1ac
+Revises: ebadc47a87db
+Create Date: 2026-11-03 10:04:40.643819
+
+"""
+from typing import Sequence, Union
+
+from alembic import op
+import sqlalchemy as sa
 
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_file='.env', env_file_encoding='utf-8'
-    )
+# revision identifiers, used by Alembic.
+revision: str = 'b5fc6ac7f1ac'
+down_revision: Union[str, Sequence[str], None] = 'ebadc47a87db'
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
 
-    DATABASE_URL: str = Field(init=False)
+
+def upgrade() -> None:
+    """Upgrade schema."""
+    # ### commands auto generated by Alembic - please adjust! ###
+    op.add_column('users', sa.Column('updated_at', sa.DateTime(), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False))
+    # ### end Alembic commands ###
+
+
+def downgrade() -> None:
+    """Downgrade schema."""
+    # ### commands auto generated by Alembic - please adjust! ###
+    op.drop_column('users', 'updated_at')
+    # ### end Alembic commands ###
 </file>
 
 <file path="migrations/versions/ebadc47a87db_create_users_table.py">
@@ -217,93 +387,6 @@ def downgrade() -> None:
     # ### end Alembic commands ###
 </file>
 
-<file path="migrations/env.py">
-from logging.config import fileConfig
-
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
-
-from alembic import context
-from fastapi_zero.settings import Settings
-from fastapi_zero.models import table_registry
-
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
-config = context.config
-config.set_main_option(
-    'sqlalchemy.url',
-    Settings().DATABASE_URL,
-)
-
-# Interpret the config file for Python logging.
-# This line sets up loggers basically.
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
-
-# add your model's MetaData object here
-# for 'autogenerate' support
-# from myapp import mymodel
-# target_metadata = mymodel.Base.metadata
-target_metadata = table_registry.metadata
-
-# other values from the config, defined by the needs of env.py,
-# can be acquired:
-# my_important_option = config.get_main_option("my_important_option")
-# ... etc.
-
-
-def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode.
-
-    This configures the context with just a URL
-    and not an Engine, though an Engine is acceptable
-    here as well.  By skipping the Engine creation
-    we don't even need a DBAPI to be available.
-
-    Calls to context.execute() here emit the given string to the
-    script output.
-
-    """
-    url = config.get_main_option("sqlalchemy.url")
-    context.configure(
-        url=url,
-        target_metadata=target_metadata,
-        literal_binds=True,
-        dialect_opts={"paramstyle": "named"},
-    )
-
-    with context.begin_transaction():
-        context.run_migrations()
-
-
-def run_migrations_online() -> None:
-    """Run migrations in 'online' mode.
-
-    In this scenario we need to create an Engine
-    and associate a connection with the context.
-
-    """
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
-
-    with connectable.connect() as connection:
-        context.configure(
-            connection=connection, target_metadata=target_metadata
-        )
-
-        with context.begin_transaction():
-            context.run_migrations()
-
-
-if context.is_offline_mode():
-    run_migrations_offline()
-else:
-    run_migrations_online()
-</file>
-
 <file path="migrations/README">
 Generic single-database configuration.
 </file>
@@ -341,79 +424,6 @@ def downgrade() -> None:
 
 <file path="tests/__init__.py">
 
-</file>
-
-<file path="tests/test_db.py">
-from dataclasses import asdict
-
-from sqlalchemy import select, text
-from sqlalchemy.orm import Session
-
-from fastapi_zero.database import get_session
-from fastapi_zero.models import User
-from tests.conftest import MockDbTime
-
-
-def test_create_user(session: Session, mock_db_time: MockDbTime) -> None:
-    with mock_db_time(model=User) as (time_post, _time_put):
-        new_user = User(
-            username='test',
-            email='test@example.com',
-            password='secret',
-        )
-
-        session.add(new_user)
-        session.commit()
-
-        user = session.scalar(select(User).where(User.username == 'test'))
-
-    assert user is not None
-    assert asdict(user) == {
-        'id': 1,
-        'username': 'test',
-        'email': 'test@example.com',
-        'password': 'secret',
-        'created_at': time_post,
-        'updated_at': time_post,
-    }
-
-
-def test_update_user(session: Session, mock_db_time: MockDbTime) -> None:
-    with mock_db_time(model=User) as (time_post, time_put):
-        new_user = User(
-            username='test',
-            email='test@example.com',
-            password='secret',
-        )
-
-        session.add(new_user)
-        session.commit()
-
-        user = session.scalar(select(User).where(User.username == 'test'))
-
-        assert user is not None
-
-        user.username = 'test2'
-        user.email = 'test2@example.com'
-        user.password = 'secret2'
-
-        session.commit()
-        session.refresh(user)
-
-        assert asdict(user) == {
-            'id': 1,
-            'username': 'test2',
-            'email': 'test2@example.com',
-            'password': 'secret2',
-            'created_at': time_post,
-            'updated_at': time_put,
-        }
-
-
-def test_get_session() -> None:
-    with get_session() as session:
-        response = session.execute(text('SELECT 1')).scalar()
-        assert response == 1
 </file>
 
 <file path="alembic.ini">
@@ -568,135 +578,178 @@ format = %(levelname)-5.5s [%(name)s] %(message)s
 datefmt = %H:%M:%S
 </file>
 
-<file path="fastapi_zero/schemas.py">
-from pydantic import BaseModel, ConfigDict, EmailStr
+<file path="fastapi_zero/settings.py">
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Message(BaseModel):
-    message: str
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file='.env', env_file_encoding='utf-8'
+    )
 
-
-class UserSchema(BaseModel):
-    username: str
-    email: EmailStr
-    password: str
-
-
-class UserPublic(BaseModel):
-    id: int
-    username: str
-    email: EmailStr
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-class UserList(BaseModel):
-    users: list[UserPublic]
+    DATABASE_URL: str = Field(init=False)
 </file>
 
-<file path="tests/conftest.py">
-from collections.abc import Callable, Generator
-from contextlib import AbstractContextManager, contextmanager
-from datetime import datetime
-from typing import Any
+<file path="migrations/env.py">
+from logging.config import fileConfig
 
-import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event
+from sqlalchemy import engine_from_config
+from sqlalchemy import pool
+
+from alembic import context
+from fastapi_zero.settings import Settings
+from fastapi_zero.models import table_registry
+
+# this is the Alembic Config object, which provides
+# access to the values within the .ini file in use.
+config = context.config
+config.set_main_option(
+    'sqlalchemy.url',
+    Settings().DATABASE_URL,
+)
+
+# Interpret the config file for Python logging.
+# This line sets up loggers basically.
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+
+# add your model's MetaData object here
+# for 'autogenerate' support
+# from myapp import mymodel
+# target_metadata = mymodel.Base.metadata
+target_metadata = table_registry.metadata
+
+# other values from the config, defined by the needs of env.py,
+# can be acquired:
+# my_important_option = config.get_main_option("my_important_option")
+# ... etc.
+
+
+def run_migrations_offline() -> None:
+    """Run migrations in 'offline' mode.
+
+    This configures the context with just a URL
+    and not an Engine, though an Engine is acceptable
+    here as well.  By skipping the Engine creation
+    we don't even need a DBAPI to be available.
+
+    Calls to context.execute() here emit the given string to the
+    script output.
+
+    """
+    url = config.get_main_option("sqlalchemy.url")
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+    )
+
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def run_migrations_online() -> None:
+    """Run migrations in 'online' mode.
+
+    In this scenario we need to create an Engine
+    and associate a connection with the context.
+
+    """
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
+
+    with connectable.connect() as connection:
+        context.configure(
+            connection=connection, target_metadata=target_metadata
+        )
+
+        with context.begin_transaction():
+            context.run_migrations()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
+</file>
+
+<file path="tests/test_db.py">
+from dataclasses import asdict
+
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
-from sqlalchemy.pool import StaticPool
 
-from fastapi_zero.app import app
 from fastapi_zero.database import get_session
-from fastapi_zero.models import User, table_registry
-
-type MockDbTime = Callable[
-    ..., AbstractContextManager[tuple[datetime, datetime]]
-]
+from fastapi_zero.models import User
+from tests.conftest import MockDbTime
 
 
-@pytest.fixture
-def client(session: Session) -> Generator[TestClient]:
-    def get_session_override() -> Session:
-        return session
+def test_create_user(session: Session, mock_db_time: MockDbTime) -> None:
+    with mock_db_time(model=User) as (time_post, _time_put):
+        new_user = User(
+            username='test',
+            email='test@example.com',
+            password='secret',
+        )
 
-    with TestClient(app) as client:
-        app.dependency_overrides[get_session] = get_session_override
-        yield client
+        session.add(new_user)
+        session.commit()
 
-    app.dependency_overrides.clear()
+        user = session.scalar(select(User).where(User.username == 'test'))
 
-
-@pytest.fixture
-def session() -> Generator[Session]:
-    # cria a engine
-    engine = create_engine(
-        'sqlite://',
-        connect_args={'check_same_thread': False},
-        poolclass=StaticPool,
-    )
-
-    # cria as tabelas na engine
-    table_registry.metadata.create_all(engine)
-
-    # abre a sessão na engine
-    with Session(engine) as session:
-        yield session
-
-    # limpa a engine ao terminar a execução
-    table_registry.metadata.drop_all(engine)
-    engine.dispose()
+    assert user is not None
+    assert asdict(user) == {
+        'id': 1,
+        'username': 'test',
+        'email': 'test@example.com',
+        'password': 'secret',
+        'created_at': time_post,
+        'updated_at': time_post,
+    }
 
 
-@contextmanager
-def _mock_db_time(
-    *,
-    model: type[Any],
-    time_post: datetime = datetime(2026, 10, 10),
-    time_put: datetime = datetime(2026, 10, 12),
-) -> Generator[tuple[datetime, datetime]]:
+def test_update_user(session: Session, mock_db_time: MockDbTime) -> None:
+    with mock_db_time(model=User) as (time_post, time_put):
+        new_user = User(
+            username='test',
+            email='test@example.com',
+            password='secret',
+        )
 
-    def fake_insert_hook(
-        _mapper: object, _connection: object, target: Any
-    ) -> None:
-        if hasattr(target, 'created_at'):
-            target.created_at = time_post
-        if hasattr(target, 'updated_at'):
-            target.updated_at = time_post
+        session.add(new_user)
+        session.commit()
 
-    def fake_update_hook(
-        _mapper: object, _connection: object, target: Any
-    ) -> None:
-        if hasattr(target, 'updated_at'):
-            target.updated_at = time_put
+        user = session.scalar(select(User).where(User.username == 'test'))
 
-    event.listen(model, 'before_insert', fake_insert_hook)
-    event.listen(model, 'before_update', fake_update_hook)
+        assert user is not None
 
-    yield time_post, time_put
+        user.username = 'test2'
+        user.email = 'test2@example.com'
+        user.password = 'secret2'
 
-    event.remove(model, 'before_insert', fake_insert_hook)
-    event.remove(model, 'before_update', fake_update_hook)
+        session.commit()
+        session.refresh(user)
 
-
-@pytest.fixture
-def mock_db_time() -> MockDbTime:
-    return _mock_db_time
+        assert asdict(user) == {
+            'id': 1,
+            'username': 'test2',
+            'email': 'test2@example.com',
+            'password': 'secret2',
+            'created_at': time_post,
+            'updated_at': time_put,
+        }
 
 
-@pytest.fixture
-def user(session: Session) -> User:
-    user = User(
-        username='test',
-        email='test@example.com',
-        password='testTest',
-    )
+def test_get_session() -> None:
+    session = next(get_session())
 
-    session.add(user)
-    session.commit()
-    session.refresh(user)
-
-    return user
+    response = session.execute(text('SELECT 1')).scalar()
+    assert response == 1
 </file>
 
 <file path=".gitignore">
@@ -933,10 +986,164 @@ __marimo__/
 # FastAPI até o deploy - Base (2026)J
 </file>
 
+<file path="fastapi_zero/schemas.py">
+from pydantic import BaseModel, ConfigDict, EmailStr
+
+
+class Message(BaseModel):
+    message: str
+
+
+class UserSchema(BaseModel):
+    username: str
+    email: EmailStr
+    password: str
+
+
+class UserPublic(BaseModel):
+    id: int
+    username: str
+    email: EmailStr
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UserList(BaseModel):
+    users: list[UserPublic]
+
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+</file>
+
+<file path="tests/conftest.py">
+import secrets
+from collections.abc import Callable, Generator
+from contextlib import AbstractContextManager, contextmanager
+from datetime import datetime
+from typing import Any
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
+
+from fastapi_zero.app import app
+from fastapi_zero.database import get_session
+from fastapi_zero.models import User, table_registry
+from fastapi_zero.security import get_password_hash
+
+type MockDbTime = Callable[
+    ..., AbstractContextManager[tuple[datetime, datetime]]
+]
+
+
+@pytest.fixture
+def client(session: Session) -> Generator[TestClient]:
+    def get_session_override() -> Session:
+        return session
+
+    with TestClient(app) as client:
+        app.dependency_overrides[get_session] = get_session_override
+        yield client
+
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def session() -> Generator[Session]:
+    # cria a engine
+    engine = create_engine(
+        'sqlite://',
+        connect_args={'check_same_thread': False},
+        poolclass=StaticPool,
+    )
+
+    # cria as tabelas na engine
+    table_registry.metadata.create_all(engine)
+
+    # abre a sessão na engine
+    with Session(engine) as session:
+        yield session
+
+    # limpa a engine ao terminar a execução
+    table_registry.metadata.drop_all(engine)
+    engine.dispose()
+
+
+@contextmanager
+def _mock_db_time(
+    *,
+    model: type[Any],
+    time_post: datetime = datetime(2026, 10, 10),
+    time_put: datetime = datetime(2026, 10, 12),
+) -> Generator[tuple[datetime, datetime]]:
+
+    def fake_insert_hook(
+        _mapper: object, _connection: object, target: Any
+    ) -> None:
+        if hasattr(target, 'created_at'):
+            target.created_at = time_post
+        if hasattr(target, 'updated_at'):
+            target.updated_at = time_post
+
+    def fake_update_hook(
+        _mapper: object, _connection: object, target: Any
+    ) -> None:
+        if hasattr(target, 'updated_at'):
+            target.updated_at = time_put
+
+    event.listen(model, 'before_insert', fake_insert_hook)
+    event.listen(model, 'before_update', fake_update_hook)
+
+    yield time_post, time_put
+
+    event.remove(model, 'before_insert', fake_insert_hook)
+    event.remove(model, 'before_update', fake_update_hook)
+
+
+@pytest.fixture
+def mock_db_time() -> MockDbTime:
+    return _mock_db_time
+
+
+@pytest.fixture
+def clean_password() -> str:
+    return secrets.token_hex()
+
+
+@pytest.fixture
+def user(session: Session, clean_password: str) -> User:
+    user = User(
+        username='test',
+        email='test@example.com',
+        password=get_password_hash(clean_password),
+    )
+
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+
+    return user
+
+
+@pytest.fixture
+def token(client: TestClient, user: User, clean_password: str) -> str:
+    response = client.post(
+        '/token', data={'username': user.email, 'password': clean_password}
+    )
+
+    return response.json()['access_token']
+</file>
+
 <file path="fastapi_zero/app.py">
 from http import HTTPStatus
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -945,9 +1152,16 @@ from fastapi_zero.database import get_session
 from fastapi_zero.models import User
 from fastapi_zero.schemas import (
     Message,
+    Token,
     UserList,
     UserPublic,
     UserSchema,
+)
+from fastapi_zero.security import (
+    create_access_token,
+    get_current_user,
+    get_password_hash,
+    verify_password,
 )
 
 app = FastAPI(title='APIzinha do Mal')
@@ -960,7 +1174,8 @@ def read_root() -> Message:
 
 @app.post('/users', status_code=HTTPStatus.CREATED)
 def create_user(
-    user: UserSchema, session: Session = Depends(get_session)
+    user: UserSchema,
+    session: Session = Depends(get_session),
 ) -> UserPublic:
 
     db_user = session.scalar(
@@ -973,13 +1188,14 @@ def create_user(
         if db_user.username == user.username:
             raise HTTPException(
                 status_code=HTTPStatus.CONFLICT,
-                detail='username already exists',
+                detail='Username already exists',
             )
         else:
             raise HTTPException(
-                status_code=HTTPStatus.CONFLICT, detail='email already exists'
+                status_code=HTTPStatus.CONFLICT, detail='Email already exists'
             )
 
+    user.password = get_password_hash(user.password)
     db_user = User(**user.model_dump())
 
     session.add(db_user)
@@ -991,7 +1207,10 @@ def create_user(
 
 @app.get('/users', status_code=HTTPStatus.OK)
 def get_users(
-    limit: int = 10, offset: int = 0, session: Session = Depends(get_session)
+    limit: int = 10,
+    offset: int = 0,
+    session: Session = Depends(get_session),
+    current_user: Any = Depends(get_current_user),
 ) -> UserList:
 
     return UserList.model_validate({
@@ -1003,13 +1222,14 @@ def get_users(
 
 @app.get('/users/{user_id}', status_code=HTTPStatus.OK)
 def get_user_by_id(
-    user_id: int, session: Session = Depends(get_session)
+    user_id: int,
+    session: Session = Depends(get_session),
 ) -> UserPublic:
     user_db = session.scalar(select(User).where(User.id == user_id))
 
     if not user_db:
         raise HTTPException(
-            status_code=HTTPStatus.NOT_FOUND, detail='user not found'
+            status_code=HTTPStatus.NOT_FOUND, detail='User not found'
         )
 
     return UserPublic.model_validate(user_db)
@@ -1017,50 +1237,76 @@ def get_user_by_id(
 
 @app.put('/users/{user_id}', status_code=HTTPStatus.OK)
 def update_user(
-    user_id: int, user: UserSchema, session: Session = Depends(get_session)
+    user_id: int,
+    user: UserSchema,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ) -> UserPublic:
-    user_db = session.scalar(select(User).where(User.id == user_id))
 
-    if not user_db:
+    if current_user.id != user_id:
         raise HTTPException(
-            status_code=HTTPStatus.NOT_FOUND, detail='user not found'
+            status_code=HTTPStatus.FORBIDDEN, detail='Not enough permission'
         )
 
     try:
-        user_db.username = user.username
-        user_db.email = user.email
-        user_db.password = user.password
+        current_user.username = user.username
+        current_user.email = user.email
+        current_user.password = get_password_hash(user.password)
 
         session.commit()
-        session.refresh(user_db)
+        session.refresh(current_user)
 
-        return UserPublic.model_validate(user_db)
+        return UserPublic.model_validate(current_user)
 
     except IntegrityError as e:
         raise HTTPException(
             status_code=HTTPStatus.CONFLICT,
-            detail='username or email already exists',
+            detail='Username or email already exists',
         ) from e
 
 
 @app.delete('/users/{user_id}', status_code=HTTPStatus.OK)
 def delete_user(
-    user_id: int, session: Session = Depends(get_session)
+    user_id: int,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ) -> Message:
-    user_db = session.scalar(select(User).where(User.id == user_id))
 
-    if not user_db:
+    if current_user.id != user_id:
         raise HTTPException(
-            status_code=HTTPStatus.NOT_FOUND, detail='user not found'
+            status_code=HTTPStatus.FORBIDDEN, detail='Not enough permission'
         )
 
-    session.delete(user_db)
+    session.delete(current_user)
     session.commit()
 
     return Message(message='user has been deleted')
+
+
+@app.post('/token')
+def login_for_access_token(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    session: Session = Depends(get_session),
+) -> Token:
+    user = session.scalar(select(User).where(User.email == form_data.username))
+
+    if not user:
+        raise HTTPException(
+            HTTPStatus.UNAUTHORIZED, detail='Incorrect email or password'
+        )
+
+    if not verify_password(form_data.password, user.password):
+        raise HTTPException(
+            HTTPStatus.UNAUTHORIZED, detail='Incorrect email or password'
+        )
+
+    access_token = create_access_token({'sub': user.email})
+
+    return Token(access_token=access_token, token_type='Bearer')
 </file>
 
 <file path="tests/test_app.py">
+import secrets
 from http import HTTPStatus
 
 from fastapi.testclient import TestClient
@@ -1081,7 +1327,7 @@ def test_create_user(client: TestClient) -> None:
         json={
             'username': 'alice',
             'email': 'alice@example.com',
-            'password': 'secret',
+            'password': secrets.token_hex(),
         },
     )
 
@@ -1093,17 +1339,15 @@ def test_create_user(client: TestClient) -> None:
     }
 
 
-def test_read_users(client: TestClient) -> None:
-    response = client.get('/users')
-    assert response.status_code == HTTPStatus.OK
-
-    assert response.json() == {'users': []}
-
-
-def test_read_users_with_users(client: TestClient, user: User) -> None:
+def test_get_users(client: TestClient, user: User, token: str) -> None:
     user_schema = UserPublic.model_validate(user).model_dump(mode='json')
 
-    response = client.get('/users')
+    response = client.get(
+        '/users',
+        headers={
+            'Authorization': f'Bearer {token}',
+        },
+    )
 
     assert response.json() == {'users': [user_schema]}
 
@@ -1121,16 +1365,19 @@ def test_get_user_by_id_not_found(client: TestClient, user: User) -> None:
     response = client.get(f'/users/{user.id + 1}')
 
     assert response.status_code == HTTPStatus.NOT_FOUND
-    assert response.json()['detail'] == 'user not found'
+    assert response.json()['detail'] == 'User not found'
 
 
-def test_update_user(client: TestClient, user: User) -> None:
+def test_update_user(client: TestClient, token: str) -> None:
     response = client.put(
         '/users/1',
+        headers={
+            'Authorization': f'Bearer {token}',
+        },
         json={
             'username': 'bob',
             'email': 'bob@example.com',
-            'password': 'secret',
+            'password': secrets.token_hex(),
         },
     )
 
@@ -1142,27 +1389,44 @@ def test_update_user(client: TestClient, user: User) -> None:
     }
 
 
-def test_delete_user(client: TestClient, user: User) -> None:
-    response = client.delete('/users/1')
+def test_delete_user(client: TestClient, token: str) -> None:
+    response = client.delete(
+        '/users/1',
+        headers={
+            'Authorization': f'Bearer {token}',
+        },
+    )
     assert response.status_code == HTTPStatus.OK
     assert response.json()['message'] == 'user has been deleted'
 
 
-def test_update_user_not_found(client: TestClient) -> None:
+def test_update_user_forbidden(
+    client: TestClient, user: User, token: str
+) -> None:
     response = client.put(
-        '/users/1',
+        f'/users/{user.id + 1}',
+        headers={
+            'Authorization': f'Bearer {token}',
+        },
         json={
             'username': 'test',
             'email': 'test@example.com',
-            'password': '123',
+            'password': secrets.token_hex(),
         },
     )
-    assert response.status_code == HTTPStatus.NOT_FOUND
+    assert response.status_code == HTTPStatus.FORBIDDEN
 
 
-def test_delete_user_not_found(client: TestClient) -> None:
-    response = client.delete('/users/1')
-    assert response.status_code == HTTPStatus.NOT_FOUND
+def test_delete_user_forbidden(
+    client: TestClient, user: User, token: str
+) -> None:
+    response = client.delete(
+        f'/users/{user.id + 1}',
+        headers={
+            'Authorization': f'Bearer {token}',
+        },
+    )
+    assert response.status_code == HTTPStatus.FORBIDDEN
 
 
 def test_create_user_username_integrity_error(
@@ -1173,11 +1437,11 @@ def test_create_user_username_integrity_error(
         json={
             'username': user.username,
             'email': 'new@example.com',
-            'password': 'secret',
+            'password': secrets.token_hex(),
         },
     )
     assert response.status_code == HTTPStatus.CONFLICT
-    assert response.json()['detail'] == 'username already exists'
+    assert response.json()['detail'] == 'Username already exists'
 
 
 def test_create_user_email_integrity_error(
@@ -1188,27 +1452,32 @@ def test_create_user_email_integrity_error(
         json={
             'username': 'new',
             'email': user.email,
-            'password': 'secret',
+            'password': secrets.token_hex(),
         },
     )
     assert response.status_code == HTTPStatus.CONFLICT
-    assert response.json()['detail'] == 'email already exists'
+    assert response.json()['detail'] == 'Email already exists'
 
 
 def test_update_username_integrity_error(
-    client: TestClient, user: User
+    client: TestClient, user: User, token: str
 ) -> None:
+    # Criando usuário
     client.post(
         '/users',
         json={
             'username': 'vini',
             'email': 'vini@example.com',
-            'password': 'secret',
+            'password': secrets.token_hex(),
         },
     )
 
+    # Tentando usar o nome do usuário criado em outro
     response = client.put(
         f'/users/{user.id}',
+        headers={
+            'Authorization': f'Bearer {token}',
+        },
         json={
             'username': 'vini',
             'email': user.email,
@@ -1217,21 +1486,28 @@ def test_update_username_integrity_error(
     )
 
     assert response.status_code == HTTPStatus.CONFLICT
-    assert response.json()['detail'] == 'username or email already exists'
+    assert response.json()['detail'] == 'Username or email already exists'
 
 
-def test_update_email_integrity_error(client: TestClient, user: User) -> None:
+def test_update_email_integrity_error(
+    client: TestClient, user: User, token: str
+) -> None:
+    # Criando usuário
     client.post(
         '/users',
         json={
             'username': 'vini',
             'email': 'vini@example.com',
-            'password': 'secret',
+            'password': secrets.token_hex(),
         },
     )
 
+    # Tentando usar o nome do usuário criado em outro
     response = client.put(
         f'/users/{user.id}',
+        headers={
+            'Authorization': f'Bearer {token}',
+        },
         json={
             'username': user.username,
             'email': 'vini@example.com',
@@ -1240,7 +1516,14 @@ def test_update_email_integrity_error(client: TestClient, user: User) -> None:
     )
 
     assert response.status_code == HTTPStatus.CONFLICT
-    assert response.json()['detail'] == 'username or email already exists'
+    assert response.json()['detail'] == 'Username or email already exists'
+
+
+# def test_get_users_unauthorized(client: TestClient):
+#     response = client.get('/users')
+
+#     assert response.status_code == HTTPStatus.UNAUTHORIZED
+#     assert response.json()['detail'] == 'Not authenticated'
 </file>
 
 <file path="pyproject.toml">
@@ -1257,7 +1540,10 @@ dependencies = [
     "fastapi[standard] (>=0.153.0,<0.154.0)",
     "sqlalchemy (>=2.1.6,<3.0.0)",
     "pydantic-settings (>=2.16.1,<3.0.0)",
-    "alembic (>=1.20.1,<2.0.0)"
+    "alembic (>=1.20.1,<2.0.0)",
+    "pwdlib[argon2] (>=0.3.1,<0.4.0)",
+    "pyjwt (>=2.15.1,<3.0.0)",
+    "tzdata (>=2026.6,<2027.0)"
 ]
 
 [build-system]
@@ -1271,7 +1557,8 @@ dev = [
     "pytest-cov (>=7.1.0,<8.0.0)",
     "typos (>=1.51.1,<2.0.0)",
     "poethepoet (>=0.49.0,<0.50.0)",
-    "pyright[nodejs] (>=1.1.414,<2.0.0)"
+    "pyright[nodejs] (>=1.1.414,<2.0.0)",
+    "cryptography (>=50.0.2,<51.0.0)"
 ]
 
 [tool.ruff]
