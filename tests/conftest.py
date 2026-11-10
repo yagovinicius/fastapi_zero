@@ -1,13 +1,14 @@
 import secrets
-from collections.abc import Callable, Generator
+from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import AbstractContextManager, contextmanager
 from datetime import datetime
 from typing import Any
 
 import pytest
+import pytest_asyncio
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event
-from sqlalchemy.orm import Session
+from sqlalchemy import event
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from fastapi_zero.app import app
@@ -20,9 +21,9 @@ type MockDbTime = Callable[
 ]
 
 
-@pytest.fixture
-def client(session: Session) -> Generator[TestClient]:
-    def get_session_override() -> Session:
+@pytest_asyncio.fixture
+async def client(session: AsyncSession) -> AsyncGenerator[TestClient]:
+    def get_session_override() -> AsyncSession:
         return session
 
     with TestClient(app) as client:
@@ -32,25 +33,23 @@ def client(session: Session) -> Generator[TestClient]:
     app.dependency_overrides.clear()
 
 
-@pytest.fixture
-def session() -> Generator[Session]:
+@pytest_asyncio.fixture
+async def session() -> AsyncGenerator[AsyncSession]:
     # cria a engine
-    engine = create_engine(
-        'sqlite://',
+    engine = create_async_engine(
+        'sqlite+aiosqlite://',
         connect_args={'check_same_thread': False},
         poolclass=StaticPool,
     )
 
-    # cria as tabelas na engine
-    table_registry.metadata.create_all(engine)
+    async with engine.begin() as conn:
+        await conn.run_sync(table_registry.metadata.create_all)
 
-    # abre a sessão na engine
-    with Session(engine) as session:
+    async with AsyncSession(engine, expire_on_commit=False) as session:
         yield session
 
-    # limpa a engine ao terminar a execução
-    table_registry.metadata.drop_all(engine)
-    engine.dispose()
+    async with engine.begin() as conn:
+        await conn.run_sync(table_registry.metadata.drop_all)
 
 
 @contextmanager
@@ -94,8 +93,8 @@ def clean_password() -> str:
     return secrets.token_hex()
 
 
-@pytest.fixture
-def user(session: Session, clean_password: str) -> User:
+@pytest_asyncio.fixture
+async def user(session: AsyncSession, clean_password: str) -> User:
     user = User(
         username='test',
         email='test@example.com',
@@ -103,8 +102,8 @@ def user(session: Session, clean_password: str) -> User:
     )
 
     session.add(user)
-    session.commit()
-    session.refresh(user)
+    await session.commit()
+    await session.refresh(user)
 
     return user
 
