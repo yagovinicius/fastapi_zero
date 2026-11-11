@@ -1,8 +1,11 @@
 from http import HTTPStatus
 
 from fastapi.testclient import TestClient
+from freezegun.api import freeze_time
 
 from fastapi_zero.models import User
+from fastapi_zero.schemas import Token
+from tests.conftest import PayloadBuilder
 
 
 def test_get_token(
@@ -49,3 +52,71 @@ def test_get_token_unauthorized_password(
 
     assert response.status_code == HTTPStatus.UNAUTHORIZED
     assert error['detail'] == 'Incorrect email or password'
+
+
+def test_token_expired_after_time(
+    client: TestClient,
+    user: User,
+    clean_password: str,
+    build_user_schema: PayloadBuilder,
+) -> None:
+    with freeze_time('2026-10-10 17:00:00'):
+        response = client.post(
+            'api/v1/auth/token',
+            data={'username': user.email, 'password': clean_password},
+        )
+        assert response.status_code == HTTPStatus.OK
+        token = response.json()['access_token']
+
+    with freeze_time('2026-10-10 17:31:00'):
+        response = client.put(
+            f'api/v1/users/{user.id}',
+            headers={'Authorization': f'Bearer {token}'},
+            json=build_user_schema(),
+        )
+        assert response.status_code == HTTPStatus.UNAUTHORIZED
+        assert response.json()['detail'] == 'Could not validate credentials'
+
+
+def test_refresh_token(client: TestClient, token: Token) -> None:
+    response = client.post(
+        'api/v1/auth/refresh_token',
+        headers={'Authorization': f'Bearer {token}'},
+    )
+
+    assert response.status_code == HTTPStatus.OK
+    assert 'access_token' in response.json()
+    assert 'token_type' in response.json()
+    assert response.json()['token_type'] == 'Bearer'
+
+
+def test_refresh_token_user_unauthorized(client: TestClient) -> None:
+    response = client.post(
+        'api/v1/auth/refresh_token',
+        headers={'Authorization': 'Bearer invalid-token'},
+    )
+
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert response.json()['detail'] == 'Could not validate credentials'
+
+
+def test_token_expired_dont_refresh(
+    client: TestClient,
+    user: User,
+    clean_password: str,
+) -> None:
+    with freeze_time('2026-10-10 17:00:00'):
+        response = client.post(
+            'api/v1/auth/token',
+            data={'username': user.email, 'password': clean_password},
+        )
+        assert response.status_code == HTTPStatus.OK
+        token = response.json()['access_token']
+
+    with freeze_time('2026-10-10 17:31:00'):
+        response = client.post(
+            'api/v1/auth/refresh_token',
+            headers={'Authorization': f'Bearer {token}'},
+        )
+        assert response.status_code == HTTPStatus.UNAUTHORIZED
+        assert response.json()['detail'] == 'Could not validate credentials'

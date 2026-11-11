@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer
-from jwt import DecodeError, decode, encode
+from jwt import DecodeError, ExpiredSignatureError, decode, encode
 from pwdlib import PasswordHash
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,7 +44,9 @@ def create_access_token(data: dict[str, Any]) -> str:
     return encoded_jwt
 
 
-oauth_scheme = OAuth2PasswordBearer(tokenUrl='api/v1/auth/token')
+oauth_scheme = OAuth2PasswordBearer(
+    tokenUrl='api/v1/auth/token', refreshUrl='api/v1/auth/refresh_token'
+)
 
 type SessionDep = Annotated[AsyncSession, Depends(get_session)]
 type TokenDep = Annotated[str, Depends(oauth_scheme)]
@@ -67,7 +69,11 @@ async def get_current_user(
         subject_email = payload.get('sub')
         if not subject_email:
             raise credentials_exception
+
     except DecodeError as e:
+        raise credentials_exception from e
+
+    except ExpiredSignatureError as e:
         raise credentials_exception from e
 
     user = await session.scalar(

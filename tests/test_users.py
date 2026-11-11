@@ -4,23 +4,24 @@ from fastapi.testclient import TestClient
 
 from fastapi_zero.models import User
 from fastapi_zero.schemas import UserPublic
+from tests.conftest import PayloadBuilder
 
 
-def test_create_user(client: TestClient) -> None:
+def test_create_user(
+    client: TestClient, build_user_schema: PayloadBuilder
+) -> None:
+    payload = build_user_schema()
+
     response = client.post(
         '/api/v1/users',
-        json={
-            'username': 'alice',
-            'email': 'alice@example.com',
-            'password': 'secret',
-        },
+        json=payload,
     )
 
     assert response.status_code == HTTPStatus.CREATED
     assert response.json() == {
         'id': 1,
-        'username': 'alice',
-        'email': 'alice@example.com',
+        'username': payload['username'],
+        'email': payload['email'],
     }
 
 
@@ -65,30 +66,32 @@ def test_get_user_by_id_not_found(
     assert response.json()['detail'] == 'User not found'
 
 
-def test_update_user(client: TestClient, token: str) -> None:
+def test_update_user(
+    client: TestClient,
+    user: User,
+    token: str,
+    build_user_schema: PayloadBuilder,
+) -> None:
+    payload = build_user_schema()
     response = client.put(
-        '/api/v1/users/1',
+        f'/api/v1/users/{user.id}',
         headers={
             'Authorization': f'Bearer {token}',
         },
-        json={
-            'username': 'bob',
-            'email': 'bob@example.com',
-            'password': 'secret',
-        },
+        json=payload,
     )
 
     assert response.status_code == HTTPStatus.OK
     assert response.json() == {
-        'id': 1,
-        'username': 'bob',
-        'email': 'bob@example.com',
+        'id': user.id,
+        'username': payload['username'],
+        'email': payload['email'],
     }
 
 
-def test_delete_user(client: TestClient, token: str) -> None:
+def test_delete_user(client: TestClient, token: str, user: User) -> None:
     response = client.delete(
-        '/api/v1/users/1',
+        f'/api/v1/users/{user.id}',
         headers={
             'Authorization': f'Bearer {token}',
         },
@@ -97,89 +100,71 @@ def test_delete_user(client: TestClient, token: str) -> None:
     assert response.json()['message'] == 'user has been deleted'
 
 
-def test_update_user_forbidden(
-    client: TestClient, user: User, token: str
+def test_update_user_wrong_user(
+    client: TestClient,
+    other_user: User,
+    token: str,
+    build_user_schema: PayloadBuilder,
 ) -> None:
     response = client.put(
-        f'/api/v1/users/{user.id + 1}',
+        f'/api/v1/users/{other_user.id}',
         headers={
             'Authorization': f'Bearer {token}',
         },
-        json={
-            'username': 'test',
-            'email': 'test@example.com',
-            'password': 'secret',
-        },
+        json=build_user_schema(),
     )
     assert response.status_code == HTTPStatus.FORBIDDEN
+    assert response.json()['detail'] == 'Not enough permission'
 
 
-def test_delete_user_forbidden(
-    client: TestClient, user: User, token: str
+def test_delete_user_wrong_user(
+    client: TestClient, other_user: User, token: str
 ) -> None:
     response = client.delete(
-        f'/api/v1/users/{user.id + 1}',
+        f'/api/v1/users/{other_user.id}',
         headers={
             'Authorization': f'Bearer {token}',
         },
     )
     assert response.status_code == HTTPStatus.FORBIDDEN
+    assert response.json()['detail'] == 'Not enough permission'
 
 
 def test_create_user_username_integrity_error(
-    client: TestClient, user: User
+    client: TestClient, user: User, build_user_schema: PayloadBuilder
 ) -> None:
     response = client.post(
         '/api/v1/users',
-        json={
-            'username': user.username,
-            'email': 'new@example.com',
-            'password': 'secret',
-        },
+        json=build_user_schema(username=user.username),
     )
     assert response.status_code == HTTPStatus.CONFLICT
     assert response.json()['detail'] == 'Username already exists'
 
 
 def test_create_user_email_integrity_error(
-    client: TestClient, user: User
+    client: TestClient, user: User, build_user_schema: PayloadBuilder
 ) -> None:
     response = client.post(
         '/api/v1/users',
-        json={
-            'username': 'new',
-            'email': user.email,
-            'password': 'secret',
-        },
+        json=build_user_schema(email=user.email),
     )
     assert response.status_code == HTTPStatus.CONFLICT
     assert response.json()['detail'] == 'Email already exists'
 
 
 def test_update_username_integrity_error(
-    client: TestClient, user: User, token: str
+    client: TestClient,
+    user: User,
+    token: str,
+    other_user: User,
+    build_user_schema: PayloadBuilder,
 ) -> None:
-    # Criando usuário
-    client.post(
-        '/api/v1/users',
-        json={
-            'username': 'vini',
-            'email': 'vini@example.com',
-            'password': 'secret',
-        },
-    )
-
-    # Tentando usar o nome do usuário criado em outro
     response = client.put(
         f'/api/v1/users/{user.id}',
         headers={
             'Authorization': f'Bearer {token}',
         },
-        json={
-            'username': 'vini',
-            'email': user.email,
-            'password': user.password,
-        },
+        json=build_user_schema(username=other_user.username),
     )
 
     assert response.status_code == HTTPStatus.CONFLICT
@@ -187,29 +172,18 @@ def test_update_username_integrity_error(
 
 
 def test_update_email_integrity_error(
-    client: TestClient, user: User, token: str
+    client: TestClient,
+    user: User,
+    token: str,
+    other_user: User,
+    build_user_schema: PayloadBuilder,
 ) -> None:
-    # Criando usuário
-    client.post(
-        '/api/v1/users',
-        json={
-            'username': 'vini',
-            'email': 'vini@example.com',
-            'password': 'secret',
-        },
-    )
-
-    # Tentando usar o nome do usuário criado em outro
     response = client.put(
         f'/api/v1/users/{user.id}',
         headers={
             'Authorization': f'Bearer {token}',
         },
-        json={
-            'username': user.username,
-            'email': 'vini@example.com',
-            'password': user.password,
-        },
+        json=build_user_schema(email=other_user.email),
     )
 
     assert response.status_code == HTTPStatus.CONFLICT

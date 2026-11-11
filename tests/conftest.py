@@ -1,4 +1,3 @@
-import secrets
 from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import AbstractContextManager, contextmanager
 from datetime import datetime
@@ -7,6 +6,8 @@ from typing import Any
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
+from polyfactory.factories.pydantic_factory import ModelFactory
+from polyfactory.factories.sqlalchemy_factory import SQLAlchemyFactory
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -14,11 +15,14 @@ from sqlalchemy.pool import StaticPool
 from fastapi_zero.app import app
 from fastapi_zero.database import get_session
 from fastapi_zero.models import User, table_registry
+from fastapi_zero.schemas import UserSchema
 from fastapi_zero.security import get_password_hash
 
 type MockDbTime = Callable[
     ..., AbstractContextManager[tuple[datetime, datetime]]
 ]
+type PayloadBuilder = Callable[..., dict[str, Any]]
+type Payload = dict[str, Any]
 
 
 @pytest_asyncio.fixture
@@ -50,6 +54,8 @@ async def session() -> AsyncGenerator[AsyncSession]:
 
     async with engine.begin() as conn:
         await conn.run_sync(table_registry.metadata.drop_all)
+
+    await engine.dispose()
 
 
 @contextmanager
@@ -90,22 +96,7 @@ def mock_db_time() -> MockDbTime:
 
 @pytest.fixture
 def clean_password() -> str:
-    return secrets.token_hex()
-
-
-@pytest_asyncio.fixture
-async def user(session: AsyncSession, clean_password: str) -> User:
-    user = User(
-        username='test',
-        email='test@example.com',
-        password=get_password_hash(clean_password),
-    )
-
-    session.add(user)
-    await session.commit()
-    await session.refresh(user)
-
-    return user
+    return UserFactory.__faker__.password()
 
 
 @pytest.fixture
@@ -116,3 +107,53 @@ def token(client: TestClient, user: User, clean_password: str) -> str:
     )
 
     return response.json()['access_token']
+
+
+@pytest_asyncio.fixture
+async def user(session: AsyncSession, clean_password: str) -> User:
+    user = UserFactory.build(password=get_password_hash(clean_password))
+
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+
+    return user
+
+
+@pytest_asyncio.fixture
+async def other_user(session: AsyncSession) -> User:
+    user = UserFactory.build()
+
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+
+    return user
+
+
+@pytest.fixture
+def build_user_schema() -> PayloadBuilder:
+    def _builder(**kwargs: Any) -> Payload:
+        return UserSchemaFactory.build(**kwargs).model_dump()
+
+    return _builder
+
+
+class UserFactory(SQLAlchemyFactory[User]):
+    __model__ = User
+
+    @classmethod
+    def username(cls) -> str:
+        return f'user_{cls.__faker__.unique.user_name()}'
+
+    @classmethod
+    def email(cls) -> str:
+        return cls.__faker__.email()
+
+    @classmethod
+    def password(cls) -> str:
+        return get_password_hash(cls.__faker__.password())
+
+
+class UserSchemaFactory(ModelFactory[UserSchema]):
+    __model__ = UserSchema

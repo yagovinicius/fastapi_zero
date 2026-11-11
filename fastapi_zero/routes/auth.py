@@ -11,6 +11,7 @@ from fastapi_zero.models import User
 from fastapi_zero.schemas import Token
 from fastapi_zero.security import (
     create_access_token,
+    get_current_user,
     verify_password,
 )
 
@@ -18,6 +19,7 @@ router = APIRouter(prefix='/auth', tags=['auth'])
 
 type OAuth2Form = Annotated[OAuth2PasswordRequestForm, Depends()]
 type SessionDep = Annotated[AsyncSession, Depends(get_session)]
+type CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
 @router.post('/token')
@@ -42,3 +44,9 @@ async def login_for_access_token(
     access_token = create_access_token({'sub': user.email})
 
     return Token(access_token=access_token, token_type='Bearer')
+
+
+@router.post('/refresh_token')
+async def refresh_token(current_user: CurrentUser) -> Token:
+    new_access_token = create_access_token(data={'sub': current_user.email})
+    return Token(access_token=new_access_token, token_type='Bearer')

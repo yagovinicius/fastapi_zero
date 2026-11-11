@@ -77,7 +77,6 @@ async def test_update_user(
 
 @pytest.mark.asyncio
 async def test_get_session() -> None:
-    session = await anext(get_session())
-
-    response: int | None = await session.scalar(select(1))
-    assert response == 1
+    async for session in get_session():
+        response: int | None = await session.scalar(select(1))
+        assert response == 1
