@@ -58,21 +58,16 @@ async def create_user(
 
 
 @router.get('/', status_code=HTTPStatus.OK)
-async def get_users(
+async def read_users(
     session: SessionDep,
     current_user: CurrentUser,
     filter_users: FilterDep,
 ) -> UserList:
+    users = await session.scalars(
+        select(User).limit(filter_users.limit).offset(filter_users.offset)
+    )
 
-    return UserList.model_validate({
-        'users': (
-            await session.scalars(
-                select(User)
-                .limit(filter_users.limit)
-                .offset(filter_users.offset)
-            )
-        ).all()
-    })
+    return UserList.model_validate({'users': users.all()})
 
 
 @router.get('/{user_id}', status_code=HTTPStatus.OK)

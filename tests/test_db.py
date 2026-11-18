@@ -35,6 +35,7 @@ async def test_create_user(
         'password': 'secret',
         'created_at': time_post,
         'updated_at': time_post,
+        'todos': [],
     }
 
 
@@ -72,6 +73,7 @@ async def test_update_user(
             'password': 'secret2',
             'created_at': time_post,
             'updated_at': time_put,
+            'todos': [],
         }
 
 

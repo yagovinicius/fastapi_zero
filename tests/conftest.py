@@ -1,3 +1,6 @@
+# ==========================
+# 1. IMPORTAÇÕES E TIPAGENS
+# ===========================
 from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import AbstractContextManager, contextmanager
 from datetime import datetime
@@ -14,17 +17,18 @@ from sqlalchemy.pool import StaticPool
 
 from fastapi_zero.app import app
 from fastapi_zero.database import get_session
-from fastapi_zero.models import User, table_registry
-from fastapi_zero.schemas import UserSchema
+from fastapi_zero.models import Todo, User, table_registry
+from fastapi_zero.schemas import TodoSchema, UserSchema
 from fastapi_zero.security import get_password_hash
 
 type MockDbTime = Callable[
     ..., AbstractContextManager[tuple[datetime, datetime]]
 ]
-type PayloadBuilder = Callable[..., dict[str, Any]]
-type Payload = dict[str, Any]
 
 
+# ====================================================================
+# 2. INFRAESTRUTURA E BANCO DE DADOS (TestClient, Session, MockTime)
+# ====================================================================
 @pytest_asyncio.fixture
 async def client(session: AsyncSession) -> AsyncGenerator[TestClient]:
     def get_session_override() -> AsyncSession:
@@ -94,6 +98,9 @@ def mock_db_time() -> MockDbTime:
     return _mock_db_time
 
 
+# ==========================
+# 3. AUTENTICAÇÃO E TOKENS
+# ==========================
 @pytest.fixture
 def clean_password() -> str:
     return UserFactory.__faker__.password()
@@ -109,6 +116,43 @@ def token(client: TestClient, user: User, clean_password: str) -> str:
     return response.json()['access_token']
 
 
+# ==============================
+# 4. FÁBRICA User (Polyfactory)
+# ==============================
+class UserFactory(SQLAlchemyFactory[User]):
+    __model__ = User
+
+    @classmethod
+    def username(cls) -> str:
+        return f'user_{cls.__faker__.unique.user_name()}'
+
+    @classmethod
+    def email(cls) -> str:
+        return cls.__faker__.unique.email()
+
+    @classmethod
+    def password(cls) -> str:
+        return get_password_hash(cls.__faker__.password())
+
+
+# ==============================
+# 5. FÁBRICA Todo (Polyfactory)
+# ==============================
+class TodoFactory(SQLAlchemyFactory[Todo]):
+    __model__ = Todo
+
+    @classmethod
+    def title(cls) -> str:
+        return cls.__faker__.sentence(nb_words=4).rstrip('.')
+
+    @classmethod
+    def description(cls) -> str:
+        return cls.__faker__.text()
+
+
+# ==================================================================
+# 6. FIXTURES DE Users (Objetos instanciados no banco e Builders)
+# ==================================================================
 @pytest_asyncio.fixture
 async def user(session: AsyncSession, clean_password: str) -> User:
     user = UserFactory.build(password=get_password_hash(clean_password))
@@ -131,29 +175,23 @@ async def other_user(session: AsyncSession) -> User:
     return user
 
 
-@pytest.fixture
-def build_user_schema() -> PayloadBuilder:
-    def _builder(**kwargs: Any) -> Payload:
-        return UserSchemaFactory.build(**kwargs).model_dump()
-
-    return _builder
-
-
-class UserFactory(SQLAlchemyFactory[User]):
-    __model__ = User
-
-    @classmethod
-    def username(cls) -> str:
-        return f'user_{cls.__faker__.unique.user_name()}'
-
-    @classmethod
-    def email(cls) -> str:
-        return cls.__faker__.email()
-
-    @classmethod
-    def password(cls) -> str:
-        return get_password_hash(cls.__faker__.password())
-
-
 class UserSchemaFactory(ModelFactory[UserSchema]):
     __model__ = UserSchema
+
+
+# ===============================================================
+# 7. FIXTURES DE Todos (Objetos instanciados no banco e Builders)
+# ===============================================================
+@pytest_asyncio.fixture
+async def todo(session: AsyncSession, user: User) -> Todo:
+    todo = TodoFactory.build(user_id=user.id)
+
+    session.add(todo)
+    await session.commit()
+    await session.refresh(todo)
+
+    return todo
+
+
+class TodoSchemaFactory(ModelFactory[TodoSchema]):
+    __model__ = TodoSchema

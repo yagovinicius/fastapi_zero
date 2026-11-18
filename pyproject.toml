@@ -42,7 +42,7 @@ extend-exclude = ['migrations']
 
 [tool.ruff.lint]
 preview = true
-select = ['I', 'F', 'E', 'W', 'PL', 'PT', 'UP', 'B', 'SIM', 'FAST']
+select = ['I', 'F', 'E', 'W', 'PL', 'PT', 'UP', 'B', 'SIM', 'FAST', 'ASYNC']
 
 [tool.ruff.format]
 preview = true
@@ -64,6 +64,9 @@ concurrency = ["thread", "greenlet"]
 
 [tool.typos.files]
 extend-exclude = ["*.md", "migrations"]
+
+[tool.typos.default.extend-words]
+selectin = "selectin"
 
 [tool.poe] 
 poetry_command = ""

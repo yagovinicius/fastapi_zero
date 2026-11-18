@@ -4,24 +4,25 @@ from fastapi.testclient import TestClient
 
 from fastapi_zero.models import User
 from fastapi_zero.schemas import UserPublic
-from tests.conftest import PayloadBuilder
+from tests.conftest import MockDbTime, UserSchemaFactory
 
 
-def test_create_user(
-    client: TestClient, build_user_schema: PayloadBuilder
-) -> None:
-    payload = build_user_schema()
+def test_create_user(client: TestClient, mock_db_time: MockDbTime) -> None:
+    with mock_db_time(model=User) as (time_post, _time_put):
+        user_schema = UserSchemaFactory.build()
 
-    response = client.post(
-        '/api/v1/users',
-        json=payload,
-    )
+        response = client.post(
+            '/api/v1/users',
+            json=user_schema.model_dump(mode='json'),
+        )
 
     assert response.status_code == HTTPStatus.CREATED
     assert response.json() == {
         'id': 1,
-        'username': payload['username'],
-        'email': payload['email'],
+        'username': user_schema.username,
+        'email': user_schema.email,
+        'created_at': time_post.isoformat(),
+        'updated_at': time_post.isoformat(),
     }
 
 
@@ -34,7 +35,7 @@ def test_get_users(client: TestClient, user: User, token: str) -> None:
             'Authorization': f'Bearer {token}',
         },
     )
-
+    assert response.status_code == HTTPStatus.OK
     assert response.json() == {'users': [user_schema]}
 
 
@@ -70,22 +71,26 @@ def test_update_user(
     client: TestClient,
     user: User,
     token: str,
-    build_user_schema: PayloadBuilder,
+    mock_db_time: MockDbTime,
 ) -> None:
-    payload = build_user_schema()
-    response = client.put(
-        f'/api/v1/users/{user.id}',
-        headers={
-            'Authorization': f'Bearer {token}',
-        },
-        json=payload,
-    )
+    with mock_db_time(model=User) as (_time_post, time_put):
+        changes = UserSchemaFactory.build()
+
+        response = client.put(
+            f'/api/v1/users/{user.id}',
+            headers={
+                'Authorization': f'Bearer {token}',
+            },
+            json=changes.model_dump(mode='json'),
+        )
 
     assert response.status_code == HTTPStatus.OK
     assert response.json() == {
         'id': user.id,
-        'username': payload['username'],
-        'email': payload['email'],
+        'username': changes.username,
+        'email': changes.email,
+        'created_at': user.created_at.isoformat(),
+        'updated_at': time_put.isoformat(),
     }
 
 
@@ -101,17 +106,15 @@ def test_delete_user(client: TestClient, token: str, user: User) -> None:
 
 
 def test_update_user_wrong_user(
-    client: TestClient,
-    other_user: User,
-    token: str,
-    build_user_schema: PayloadBuilder,
+    client: TestClient, other_user: User, user: User, token: str
 ) -> None:
+    changes = UserSchemaFactory.build()
     response = client.put(
         f'/api/v1/users/{other_user.id}',
         headers={
             'Authorization': f'Bearer {token}',
         },
-        json=build_user_schema(),
+        json=changes.model_dump(mode='json'),
     )
     assert response.status_code == HTTPStatus.FORBIDDEN
     assert response.json()['detail'] == 'Not enough permission'
@@ -131,40 +134,42 @@ def test_delete_user_wrong_user(
 
 
 def test_create_user_username_integrity_error(
-    client: TestClient, user: User, build_user_schema: PayloadBuilder
+    client: TestClient, user: User
 ) -> None:
+    user_schema = UserSchemaFactory.build(username=user.username)
+
     response = client.post(
         '/api/v1/users',
-        json=build_user_schema(username=user.username),
+        json=user_schema.model_dump(mode='json'),
     )
     assert response.status_code == HTTPStatus.CONFLICT
     assert response.json()['detail'] == 'Username already exists'
 
 
 def test_create_user_email_integrity_error(
-    client: TestClient, user: User, build_user_schema: PayloadBuilder
+    client: TestClient, user: User
 ) -> None:
+    user_schema = UserSchemaFactory.build(email=user.email)
+
     response = client.post(
         '/api/v1/users',
-        json=build_user_schema(email=user.email),
+        json=user_schema.model_dump(mode='json'),
     )
     assert response.status_code == HTTPStatus.CONFLICT
     assert response.json()['detail'] == 'Email already exists'
 
 
 def test_update_username_integrity_error(
-    client: TestClient,
-    user: User,
-    token: str,
-    other_user: User,
-    build_user_schema: PayloadBuilder,
+    client: TestClient, user: User, token: str, other_user: User
 ) -> None:
+    changes = UserSchemaFactory.build(username=other_user.username)
+
     response = client.put(
         f'/api/v1/users/{user.id}',
         headers={
             'Authorization': f'Bearer {token}',
         },
-        json=build_user_schema(username=other_user.username),
+        json=changes.model_dump(mode='json'),
     )
 
     assert response.status_code == HTTPStatus.CONFLICT
@@ -172,18 +177,16 @@ def test_update_username_integrity_error(
 
 
 def test_update_email_integrity_error(
-    client: TestClient,
-    user: User,
-    token: str,
-    other_user: User,
-    build_user_schema: PayloadBuilder,
+    client: TestClient, user: User, token: str, other_user: User
 ) -> None:
+    changes = UserSchemaFactory.build(email=other_user.email)
+
     response = client.put(
         f'/api/v1/users/{user.id}',
         headers={
             'Authorization': f'Bearer {token}',
         },
-        json=build_user_schema(email=other_user.email),
+        json=changes.model_dump(mode='json'),
     )
 
     assert response.status_code == HTTPStatus.CONFLICT
