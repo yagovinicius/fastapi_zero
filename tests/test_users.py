@@ -17,8 +17,10 @@ def test_create_user(client: TestClient, mock_db_time: MockDbTime) -> None:
         )
 
     assert response.status_code == HTTPStatus.CREATED
+    assert isinstance(response.json()['id'], int)
+    assert response.json()['id'] >= 1
     assert response.json() == {
-        'id': 1,
+        'id': response.json()['id'],
         'username': user_schema.username,
         'email': user_schema.email,
         'created_at': time_post.isoformat(),
@@ -106,7 +108,7 @@ def test_delete_user(client: TestClient, token: str, user: User) -> None:
 
 
 def test_update_user_wrong_user(
-    client: TestClient, other_user: User, user: User, token: str
+    client: TestClient, other_user: User, token: str
 ) -> None:
     changes = UserSchemaFactory.build()
     response = client.put(

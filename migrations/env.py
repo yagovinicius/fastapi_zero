@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from logging.config import fileConfig
 
 from sqlalchemy.ext.asyncio import async_engine_from_config
@@ -31,8 +32,6 @@ target_metadata = table_registry.metadata
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
-
-
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
 
@@ -78,9 +77,17 @@ async def run_async_migrations_online() -> None:
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
 
+    await connectable.dispose()
+
 
 def run_migrations_online() -> None:
-    asyncio.run(run_async_migrations_online())
+    if sys.platform == 'win32':
+        asyncio.run(
+            run_async_migrations_online(),
+            loop_factory=asyncio.SelectorEventLoop,
+        )
+    else:
+        asyncio.run(run_async_migrations_online())
 
 if context.is_offline_mode():
     run_migrations_offline()

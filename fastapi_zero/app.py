@@ -1,9 +1,15 @@
+import asyncio
+import sys
 from http import HTTPStatus
 
 from fastapi import FastAPI
 
 from fastapi_zero.routes.api import api_router
 from fastapi_zero.schemas import Message
+
+if sys.platform == 'win32':  # pragma: no cover
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # type: ignore
+
 
 app = FastAPI(title='APIzinha do Mal')
 

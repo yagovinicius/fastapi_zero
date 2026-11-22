@@ -2,6 +2,7 @@ from http import HTTPStatus
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import DataError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fastapi_zero.models import Todo, TodoState, User
@@ -11,7 +12,6 @@ from tests.conftest import MockDbTime, TodoFactory, TodoSchemaFactory
 
 def test_create_todo(
     client: TestClient,
-    user: User,
     token: str,
     mock_db_time: MockDbTime,
 ) -> None:
@@ -27,7 +27,7 @@ def test_create_todo(
         'title': todo_schema.title,
         'description': todo_schema.description,
         'state': todo_schema.state.value,
-        'id': 1,
+        'id': response.json()['id'],
         'created_at': time_post.isoformat(),
         'updated_at': time_post.isoformat(),
     }
@@ -325,14 +325,13 @@ async def test_list_todos_should_return_all_expected_fields(
 
 
 @pytest.mark.asyncio
-async def test_create_todo_error(session: AsyncSession) -> None:
-    todo_error = TodoFactory.build(state='invalid')
+async def test_create_todo_error(session: AsyncSession, user: User) -> None:
+    todo_error = TodoFactory.build(user_id=user.id, state='invalid')
 
     session.add(todo_error)
-    await session.commit()
 
-    with pytest.raises(LookupError):
-        await session.refresh(todo_error)
+    with pytest.raises((LookupError, DataError)):
+        await session.commit()
 
 
 def test_list_todos_filter_min_length(client: TestClient, token: str) -> None:

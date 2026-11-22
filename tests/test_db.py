@@ -4,7 +4,6 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from fastapi_zero.database import get_session
 from fastapi_zero.models import User
 from tests.conftest import MockDbTime
 
@@ -28,8 +27,9 @@ async def test_create_user(
         )
 
     assert user is not None
+    assert user.id >= 1
     assert asdict(user) == {
-        'id': 1,
+        'id': new_user.id,
         'username': 'test',
         'email': 'test@example.com',
         'password': 'secret',
@@ -66,8 +66,9 @@ async def test_update_user(
         await session.commit()
         await session.refresh(user)
 
+        assert user.id >= 1
         assert asdict(user) == {
-            'id': 1,
+            'id': new_user.id,
             'username': 'test2',
             'email': 'test2@example.com',
             'password': 'secret2',
@@ -75,10 +76,3 @@ async def test_update_user(
             'updated_at': time_put,
             'todos': [],
         }
-
-
-@pytest.mark.asyncio
-async def test_get_session() -> None:
-    async for session in get_session():
-        response: int | None = await session.scalar(select(1))
-        assert response == 1

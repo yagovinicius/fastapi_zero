@@ -11,10 +11,17 @@ import pytest_asyncio
 from fastapi.testclient import TestClient
 from polyfactory.factories.pydantic_factory import ModelFactory
 from polyfactory.factories.sqlalchemy_factory import SQLAlchemyFactory
-from sqlalchemy import event
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.pool import StaticPool
+from pwdlib import PasswordHash
+from pwdlib.hashers.argon2 import Argon2Hasher
+from sqlalchemy import create_engine, event
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    create_async_engine,
+)
+from testcontainers.postgres import PostgresContainer
 
+from fastapi_zero import security
 from fastapi_zero.app import app
 from fastapi_zero.database import get_session
 from fastapi_zero.models import Todo, User, table_registry
@@ -41,23 +48,31 @@ async def client(session: AsyncSession) -> AsyncGenerator[TestClient]:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(scope='session')
+def engine() -> Generator[AsyncEngine]:
+    with PostgresContainer('postgres:18', driver='psycopg') as postgres:
+        url = postgres.get_connection_url()
+
+        sync_engine = create_engine(url)
+        table_registry.metadata.create_all(sync_engine)
+        sync_engine.dispose()
+
+        yield create_async_engine(url)
+
+
 @pytest_asyncio.fixture
-async def session() -> AsyncGenerator[AsyncSession]:
-    # cria a engine
-    engine = create_async_engine(
-        'sqlite+aiosqlite://',
-        connect_args={'check_same_thread': False},
-        poolclass=StaticPool,
-    )
+async def session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession]:
+    async with engine.connect() as conn:
+        transaction = await conn.begin()
 
-    async with engine.begin() as conn:
-        await conn.run_sync(table_registry.metadata.create_all)
+        async with AsyncSession(
+            bind=conn,
+            join_transaction_mode='create_savepoint',
+            expire_on_commit=False,
+        ) as session:
+            yield session
 
-    async with AsyncSession(engine, expire_on_commit=False) as session:
-        yield session
-
-    async with engine.begin() as conn:
-        await conn.run_sync(table_registry.metadata.drop_all)
+        await transaction.rollback()
 
     await engine.dispose()
 
@@ -104,6 +119,19 @@ def mock_db_time() -> MockDbTime:
 @pytest.fixture
 def clean_password() -> str:
     return UserFactory.__faker__.password()
+
+
+@pytest.fixture(scope='session', autouse=True)
+def fast_password_hash() -> Generator[None]:
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(
+            security,
+            'pwd_context',
+            PasswordHash((
+                Argon2Hasher(time_cost=1, memory_cost=64, parallelism=1),
+            )),
+        )
+        yield
 
 
 @pytest.fixture
