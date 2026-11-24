@@ -1,0 +1,37 @@
+name: pipeline
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar repositório
+        uses: actions/checkout@v7
+
+      - name: Instalar o python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Instalar o poetry
+        run: |
+          pipx install poetry
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Instalar dependências
+        run: |
+          poetry config virtualenvs.in-project true
+          poetry install --no-interaction
+
+      - name: Executar linter
+        run: poetry run poe lint
+
+      - name: Executar testes
+        run: poetry run poe test
+
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SECRET_KEY: ${{ secrets.SECRET_KEY }}
+      ALGORITHM: ${{ secrets.ALGORITHM }}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${{ secrets.ACCESS_TOKEN_EXPIRE_MINUTES }}

@@ -1,5 +1,8 @@
 #!/bin/sh
 
+# Para a execução em caso de erro
+set -e
+
 # Executa as migrações
 poetry run alembic upgrade head
 

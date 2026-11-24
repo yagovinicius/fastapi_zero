@@ -65,14 +65,14 @@ concurrency = ["thread", "greenlet"]
 data_file = ".pytest_cache/.coverage"
 
 [tool.typos.files]
-extend-exclude = ["*.md", "migrations", "htmlcov"]
+extend-exclude = ["*.md", "migrations", "htmlcov", "entrypoint.sh"]
 
 [tool.typos.default.extend-words]
 selectin = "selectin"
 
 [tool.poe] 
 poetry_command = ""
-executor.type = "virtualenv"
+executor.type = "poetry"
   
 [tool.poe.tasks]
 lint.sequence = [
